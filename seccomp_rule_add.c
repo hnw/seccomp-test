@@ -13,7 +13,22 @@
 #include <unistd.h>
 #include <seccomp.h>
 
-extern void *edata;
+extern void *edata, *etext;
+
+void string_literal_func(void) {
+	asm volatile (
+				  "add $0x0,%al\t\n"
+				  "add $0x0,%al\t\n"
+				  "add $0x0,%al\t\n"
+				  "add $0x0,%al\t\n"
+				  "add %al,(%eax)\t\n"
+				  "nop\t\n"
+				  "nop\t\n"
+				  "nop\t\n"
+				  "nop\t\n"
+				  );
+	return;
+}
 
 int main(int argc, char *argv[])
 {
@@ -27,9 +42,18 @@ int main(int argc, char *argv[])
 	if (ctx == NULL)
 		goto seccomp_failure;
 
-	rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(open), 2,
-						  SCMP_A0(SCMP_CMP_LE, (scmp_datum_t)&edata),
+	rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(open), 1,
 						  SCMP_A1(SCMP_CMP_MASKED_EQ, (scmp_datum_t)O_WRONLY, (scmp_datum_t)O_WRONLY)
+						  );
+	if (rc < 0)
+		goto seccomp_failure;
+	rc = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EDOM), SCMP_SYS(open), 1,
+						  SCMP_A0(SCMP_CMP_GE, (scmp_datum_t)&edata)
+						  );
+	if (rc < 0)
+		goto seccomp_failure;
+	rc = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ERANGE), SCMP_SYS(open), 1,
+						  SCMP_A0(SCMP_CMP_LE, (scmp_datum_t)&etext)
 						  );
 	if (rc < 0)
 		goto seccomp_failure;
@@ -57,7 +81,17 @@ int main(int argc, char *argv[])
 	} else {
 		fclose(fp);
 	}
-
+	fprintf(stderr, "string_literal_func=%p\n", string_literal_func);
+	fprintf(stderr, "edata=%p, etext=%p\n", &edata, &etext);
+	
+	fp = fopen((char *)string_literal_func, "w");
+	if (fp == NULL) {
+		fprintf(stderr, "fopen() failure (expected behavior)\n");
+		// do nothing
+	} else {
+		fclose(fp);
+	}
+	
 	fp = fopen("/tmp/seccomp_rule_add.txt", "w");
 	if (fp == NULL) {
 		rc = -errno;
